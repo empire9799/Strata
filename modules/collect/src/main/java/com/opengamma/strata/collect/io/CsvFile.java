@@ -5,6 +5,8 @@
  */
 package com.opengamma.strata.collect.io;
 
+import java.io.BufferedReader;
+import java.io.IOException;
 import java.io.Reader;
 import java.io.UncheckedIOException;
 import java.util.HashMap;
@@ -163,6 +165,42 @@ public final class CsvFile {
     return parseAll(lines, 0, separator, ImmutableList.of(), ImmutableMap.of());
   }
 
+  //-------------------------------------------------------------------------
+  /**
+   * Finds the separator used by the specified CSV file.
+   * <p>
+   * The separator may be a comma, semicolon, colon, tab or pipe.
+   * 
+   * @param source  the source to read as CSV
+   * @return the CSV file
+   * @throws UncheckedIOException if an IO exception occurs
+   * @throws IllegalArgumentException if the file cannot be parsed
+   */
+  public static char findSeparator(CharSource source) {
+    try (BufferedReader breader = source.openBufferedStream()) {
+      char bestSeparator = ',';
+      String line = breader.readLine();
+      int lineNumber = 1;
+      while (line != null) {
+        int bestCount = -1;
+        for (char separator : ",;:\t|".toCharArray()) {
+          try {
+            int count = CsvFile.parseLine(line, lineNumber, separator).size();
+            if (count > bestCount) {
+              bestCount = count;
+              bestSeparator = separator;
+            }
+          } catch (IllegalArgumentException ex) {
+            // ignore and try next, this case is pretty unlikely
+          }
+        }
+      }
+      return bestSeparator;
+    } catch (IOException ex) {
+      throw new UncheckedIOException(ex);
+    }
+  }
+
   //------------------------------------------------------------------------
   /**
    * Obtains an instance from a list of headers and rows.
@@ -213,39 +251,57 @@ public final class CsvFile {
 
   // parse a single line
   static ImmutableList<String> parseLine(String line, int lineNumber, char separator) {
-    if (line.length() == 0 || line.startsWith("#") || line.startsWith(";")) {
+    if (line.length() == 0 || line.startsWith("#") || (line.startsWith(";") && separator != ';')) {
       return ImmutableList.of();
     }
     ImmutableList.Builder<String> builder = ImmutableList.builder();
-    int start = 0;
-    String terminated = line + separator;
-    int nextSeparator = terminated.indexOf(separator, start);
-    while (nextSeparator >= 0) {
-      String possible = terminated.substring(start, nextSeparator).trim();
-      // handle convention where ="xxx" means xxx
-      if (possible.startsWith("=\"")) {
-        start++;
-        possible = possible.substring(1);
-      }
-      // handle quoting where "xxx""yyy" means xxx"yyy
-      if (possible.startsWith("\"")) {
-        while (true) {
-          if (possible.substring(1).replace("\"\"", "").endsWith("\"")) {
-            possible = possible.substring(1, possible.length() - 1).replace("\"\"", "\"");
-            break;
-          } else {
-            nextSeparator = terminated.indexOf(separator, nextSeparator + 1);
-            if (nextSeparator < 0) {
-              throw new IllegalArgumentException("Mismatched quotes in CSV on line " + lineNumber);
-            }
-            possible = terminated.substring(start, nextSeparator).trim();
-          }
+    String terminated = line + separator + separator;
+    // four modes of parsing - base, quoted, post-quoted and non-quoted
+    int pos = 0;
+    int startPos = 0;
+    String value = "";
+    boolean valueMode = false;
+    boolean quoteMode = false;
+    while (pos < terminated.length() - 1) {
+      char ch = terminated.charAt(pos++);
+      char next = terminated.charAt(pos);
+      if (quoteMode) {
+        if (ch == '"' && terminated.charAt(pos) == '"') {
+          pos++;
+        } else if (ch == '"') {
+          value = terminated.substring(startPos, pos - 1).replace("\"\"", "\"");
+          startPos = pos;
+          quoteMode = false;
+        } else if (pos == terminated.length() - 2) {
+          value = terminated.substring(startPos, pos).replace("\"\"", "\"");
+          startPos = pos;
+          quoteMode = false;
         }
+      } else if (valueMode) {
+        if (ch == separator) {
+          builder.add(value + terminated.substring(startPos, pos - 1).trim());
+          valueMode = false;
+          value = "";
+        }
+      } else if (ch == separator) {
+        // handle empty value
+        builder.add("");
+      } else if (ch == ' ') {
+        // ignore spaces after separators
+      } else if (ch == '=' && next == '"') {
+        // handle convention where ="xxx" means xxx
+      } else if (ch == '"') {
+        // quoted mode
+        startPos = pos;
+        quoteMode = true;
+        valueMode = true;
+      } else {
+        // non-quoted mode
+        startPos = pos - 1;
+        valueMode = true;
       }
-      builder.add(possible);
-      start = nextSeparator + 1;
-      nextSeparator = terminated.indexOf(separator, start);
     }
+    // check line has content
     ImmutableList<String> fields = builder.build();
     if (!hasContent(fields)) {
       return ImmutableList.of();
