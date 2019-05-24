@@ -383,6 +383,14 @@ public class CsvFileTest {
     assertEquals(csvFile.row(0).field(2), "e");
   }
 
+  public void test_of_quoting_equalsEnd() {
+    CsvFile csvFile = CsvFile.of(CharSource.wrap("a,="), false);
+    assertEquals(csvFile.rowCount(), 1);
+    assertEquals(csvFile.row(0).fieldCount(), 2);
+    assertEquals(csvFile.row(0).field(0), "a");
+    assertEquals(csvFile.row(0).field(1), "=");
+  }
+
   @DataProvider(name = "mismatched")
   Object[][] data_mismatched() {
     return new Object[][] {
@@ -453,6 +461,14 @@ public class CsvFileTest {
     CsvFile csvFile = CsvFile.of(new StringReader(""), false, ',');
     assertEquals(csvFile.headers().size(), 0);
     assertEquals(csvFile.rowCount(), 0);
+  }
+
+  //-------------------------------------------------------------------------
+  public void test_findSeparator() {
+    assertEquals(CsvFile.findSeparator(CharSource.wrap("a,b,c")), ',');
+    assertEquals(CsvFile.findSeparator(CharSource.wrap("a;b,c")), ',');
+    assertEquals(CsvFile.findSeparator(CharSource.wrap("a;b;c,d")), ';');
+    assertEquals(CsvFile.findSeparator(CharSource.wrap("a,\"b;;;;;;;;;;;;;;\",c")), ',');
   }
 
   //-------------------------------------------------------------------------

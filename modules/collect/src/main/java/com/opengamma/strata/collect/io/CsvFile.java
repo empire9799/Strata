@@ -181,19 +181,33 @@ public final class CsvFile {
       char bestSeparator = ',';
       String line = breader.readLine();
       int lineNumber = 1;
-      while (line != null) {
-        int bestCount = -1;
-        for (char separator : ",;:\t|".toCharArray()) {
-          try {
-            int count = CsvFile.parseLine(line, lineNumber, separator).size();
-            if (count > bestCount) {
-              bestCount = count;
-              bestSeparator = separator;
+      int contentLines = 0;
+      while (line != null && contentLines <= 20) {
+        int bestCount = 0;
+        line = line.replace("\"\"", "");
+        for (char separator : ",;\t:|".toCharArray()) {
+          int count = 0;
+          if (line.indexOf('"') >= 0) {
+            String match = separator + "\"";
+            int index = line.indexOf(match);
+            while (index >= 0) {
+              count++;
+              index = line.indexOf(match, index + 2);
             }
-          } catch (IllegalArgumentException ex) {
-            // ignore and try next, this case is pretty unlikely
+          } else {
+            count = CsvFile.parseLine(line, lineNumber, separator).size();
+          }
+          System.out.println("Char:" + separator + " has " + count);
+          if (count > bestCount) {
+            bestCount = count;
+            bestSeparator = separator;
           }
         }
+        if (bestCount > 0) {
+          contentLines++;
+        }
+        line = breader.readLine();
+        lineNumber++;
       }
       return bestSeparator;
     } catch (IOException ex) {
@@ -255,29 +269,32 @@ public final class CsvFile {
       return ImmutableList.of();
     }
     ImmutableList.Builder<String> builder = ImmutableList.builder();
-    String terminated = line + separator + separator;
-    // four modes of parsing - base, quoted, post-quoted and non-quoted
+    String terminated = line + separator;
+    // three modes of parsing - base, value and quote
+    // to match other lenient parsers, when quote mode finishes, the mode switches to value with the result combined
     int pos = 0;
     int startPos = 0;
     String value = "";
     boolean valueMode = false;
     boolean quoteMode = false;
-    while (pos < terminated.length() - 1) {
+    while (pos < terminated.length()) {
       char ch = terminated.charAt(pos++);
-      char next = terminated.charAt(pos);
       if (quoteMode) {
-        if (ch == '"' && terminated.charAt(pos) == '"') {
+        // currently in quote mode
+        if (ch == '"' && pos < terminated.length() - 1 && terminated.charAt(pos) == '"') {
+          // two double quotes will become one
           pos++;
         } else if (ch == '"') {
+          // end of quoted section
           value = terminated.substring(startPos, pos - 1).replace("\"\"", "\"");
           startPos = pos;
           quoteMode = false;
-        } else if (pos == terminated.length() - 2) {
-          value = terminated.substring(startPos, pos).replace("\"\"", "\"");
-          startPos = pos;
-          quoteMode = false;
+        } else if (pos == terminated.length()) {
+          // end of string with quote not terminated properly
+          builder.add(terminated.substring(startPos, pos - 1).replace("\"\"", "\""));
         }
       } else if (valueMode) {
+        // currently in value mode
         if (ch == separator) {
           builder.add(value + terminated.substring(startPos, pos - 1).trim());
           valueMode = false;
@@ -288,8 +305,8 @@ public final class CsvFile {
         builder.add("");
       } else if (ch == ' ') {
         // ignore spaces after separators
-      } else if (ch == '=' && next == '"') {
-        // handle convention where ="xxx" means xxx
+      } else if (ch == '=' && pos < terminated.length() - 1 && terminated.charAt(pos) == '"') {
+        // handle convention where ="xxx" means xxx by simply ignoring the equals
       } else if (ch == '"') {
         // quoted mode
         startPos = pos;
