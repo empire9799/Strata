@@ -15,6 +15,7 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.regex.Pattern;
 
+import com.google.common.base.Strings;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.io.CharSource;
@@ -154,7 +155,7 @@ public final class CsvFile {
   private static CsvFile create(List<String> lines, boolean headerRow, char separator) {
     if (headerRow) {
       for (int i = 0; i < lines.size(); i++) {
-        ImmutableList<String> headers = parseLine(lines.get(i), i + 1, separator);
+        ImmutableList<String> headers = parseLine(lines.get(i), separator);
         if (!headers.isEmpty()) {
           ImmutableMap<String, Integer> searchHeaders = buildSearchHeaders(headers);
           return parseAll(lines, i + 1, separator, headers, searchHeaders);
@@ -169,7 +170,19 @@ public final class CsvFile {
   /**
    * Finds the separator used by the specified CSV file.
    * <p>
-   * The separator may be a comma, semicolon, colon, tab or pipe.
+   * The search includes comma, semicolon, colon, tab and pipe (in that order of priority).
+   * <p>
+   * The algorithm operates in a number  of steps.
+   * Firstly, it looks for occurrences where a separator is followed by valid quoted text.
+   * If this matches, the separator is assumed to be correct.
+   * Secondly, it looks for lines that only consist of a separator.
+   * If this matches, the separator is assumed to be correct.
+   * Thirdly, it looks to see which separator is the most common on the line.
+   * If that separator is also the most common on the next line, and the number of columns matches,
+   * the separator is assumed to be correct. Otherwise another line is processed.
+   * Thus to match a separator, there must be two lines with the same number of columns.
+   * At most, 100 content lines are read from the file.
+   * The default is comma if the file is empty.
    * 
    * @param source  the source to read as CSV
    * @return the CSV file
@@ -178,41 +191,74 @@ public final class CsvFile {
    */
   public static char findSeparator(CharSource source) {
     try (BufferedReader breader = source.openBufferedStream()) {
+      int bestCount = 0;
       char bestSeparator = ',';
       String line = breader.readLine();
-      int lineNumber = 1;
       int contentLines = 0;
-      while (line != null && contentLines <= 20) {
-        int bestCount = 0;
-        line = line.replace("\"\"", "");
+      while (line != null && contentLines <= 100) {
+        line = simplifyLine(line);
+        int lineBestCount = 0;
+        char lineBestSeparator = ',';
         for (char separator : ",;\t:|".toCharArray()) {
-          int count = 0;
-          if (line.indexOf('"') >= 0) {
-            String match = separator + "\"";
-            int index = line.indexOf(match);
-            while (index >= 0) {
-              count++;
-              index = line.indexOf(match, index + 2);
-            }
-          } else {
-            count = CsvFile.parseLine(line, lineNumber, separator).size();
+          // a quote following a separator is a strong marker for the separator
+          if (line.contains(separator + "\"\"")) {
+            return separator;
           }
-          System.out.println("Char:" + separator + " has " + count);
-          if (count > bestCount) {
-            bestCount = count;
-            bestSeparator = separator;
+          // a line only formed of separators is a strong marker for the separator
+          if (line.length() > 0 && line.equals(Strings.repeat(Character.toString(separator), line.length()))) {
+            return separator;
+          }
+          // parse the row and see if it is the best match
+          int count = CsvFile.parseLine(line, separator).size();
+          if (count > lineBestCount) {
+            lineBestCount = count;
+            lineBestSeparator = separator;
           }
         }
-        if (bestCount > 0) {
+        if (lineBestCount > 0) {
           contentLines++;
+          if (bestCount > 0 && bestCount == lineBestCount && bestSeparator == lineBestSeparator) {
+            break;
+          }
+          bestCount = lineBestCount;
+          bestSeparator = lineBestSeparator;
         }
         line = breader.readLine();
-        lineNumber++;
       }
       return bestSeparator;
     } catch (IOException ex) {
       throw new UncheckedIOException(ex);
     }
+  }
+
+  // simplifies a line, removing quoted sections (which assumes the input is validly quoted)
+  private static String simplifyLine(String line) {
+    int pos = 0;
+    boolean quoteMode = false;
+    StringBuilder buf = new StringBuilder(line.length());
+    while (pos < line.length()) {
+      char ch = line.charAt(pos++);
+      if (quoteMode) {
+        // currently in quote mode
+        if (ch == '"' && pos < line.length() - 1 && line.charAt(pos) == '"') {
+          // two double quotes will become one
+          pos++;
+        } else if (ch == '"' || pos == line.length()) {
+          // end of quoted section, or end of string with quote not terminated properly
+          buf.append('"').append('"');
+          quoteMode = false;
+        }
+      } else if (ch == '"') {
+        // quoted mode
+        quoteMode = true;
+      } else if (ch == ' ' || ch == '=') {
+        // ignore awkward characters
+      } else {
+        // append all other characters
+        buf.append(ch);
+      }
+    }
+    return buf.toString();
   }
 
   //------------------------------------------------------------------------
@@ -255,7 +301,7 @@ public final class CsvFile {
 
     ImmutableList.Builder<CsvRow> rows = ImmutableList.builder();
     for (int i = lineIndex; i < lines.size(); i++) {
-      ImmutableList<String> fields = parseLine(lines.get(i), i + 1, separator);
+      ImmutableList<String> fields = parseLine(lines.get(i), separator);
       if (!fields.isEmpty()) {
         rows.add(new CsvRow(headers, searchHeaders, i + 1, fields));
       }
@@ -264,7 +310,7 @@ public final class CsvFile {
   }
 
   // parse a single line
-  static ImmutableList<String> parseLine(String line, int lineNumber, char separator) {
+  static ImmutableList<String> parseLine(String line, char separator) {
     if (line.length() == 0 || line.startsWith("#") || (line.startsWith(";") && separator != ';')) {
       return ImmutableList.of();
     }

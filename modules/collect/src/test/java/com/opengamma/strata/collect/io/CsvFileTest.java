@@ -365,6 +365,15 @@ public class CsvFileTest {
     assertEquals(csvFile.row(1).field(1), " r22 ");
   }
 
+  public void test_of_quoting_oddStart() {
+    CsvFile csvFile = CsvFile.of(CharSource.wrap("a,b\"c\"d\",e"), false);
+    assertEquals(csvFile.rowCount(), 1);
+    assertEquals(csvFile.row(0).fieldCount(), 3);
+    assertEquals(csvFile.row(0).field(0), "a");
+    assertEquals(csvFile.row(0).field(1), "b\"c\"d\"");
+    assertEquals(csvFile.row(0).field(2), "e");
+  }
+
   public void test_of_quoting_oddMiddle() {
     CsvFile csvFile = CsvFile.of(CharSource.wrap("a,\"b\"c\"d\",e"), false);
     assertEquals(csvFile.rowCount(), 1);
@@ -464,11 +473,46 @@ public class CsvFileTest {
   }
 
   //-------------------------------------------------------------------------
-  public void test_findSeparator() {
-    assertEquals(CsvFile.findSeparator(CharSource.wrap("a,b,c")), ',');
-    assertEquals(CsvFile.findSeparator(CharSource.wrap("a;b,c")), ',');
-    assertEquals(CsvFile.findSeparator(CharSource.wrap("a;b;c,d")), ';');
-    assertEquals(CsvFile.findSeparator(CharSource.wrap("a,\"b;;;;;;;;;;;;;;\",c")), ',');
+  @DataProvider(name = "findSeparator")
+  Object[][] data_findSeparator() {
+    return new Object[][] {
+        {"", ','},
+        {"a", ','},
+        {",", ','},
+        {";", ';'},
+        {":", ':'},
+        {"\t", '\t'},
+        {"|", '|'},
+        {",,", ','},
+        {";;", ';'},
+        {"::", ':'},
+        {"\t\t", '\t'},
+        {"||", '|'},
+        {"a,", ','},
+        {"a;", ';'},
+        {"a:", ':'},
+        {"a\t", '\t'},
+        {"a|", '|'},
+        {"a,b,c", ','},
+        {"a;b,c", ','},
+        {"a;b;c,d", ';'},
+        {"a;b;c,d\nabc,d", ','},
+        {"a;b;c,d\na;bc,d\\nabc,d", ','},
+        {"a;b;c|d\nabc|d", '|'},
+        {"a;b;c|d\n\nabc|d", '|'},
+        {"a,\"b;;;;;;;;;;;;;;\",c", ','},
+        {"a\tb\tc,d", '\t'},
+        {"a|b|c,d", '|'},
+        {"a:b:c,d", ':'},
+        {"foo;bar;1,25;3,25\nbar;baz;4,75;3,50", ';'},
+        {"foo;bar;1,25;3,25\n;;;\nbar;baz;4,75;3,50", ';'},
+        {"foo;bar;1,25;3,25\n,,,\nbar;baz;4,75;3,50", ','},
+    };
+  }
+
+  @Test(dataProvider = "findSeparator")
+  public void test_findSeparator(String input, char expected) {
+    assertEquals(CsvFile.findSeparator(CharSource.wrap(input)), expected);
   }
 
   //-------------------------------------------------------------------------
